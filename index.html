@@ -255,7 +255,7 @@
         <button data-tab="employees"><span class="ic">&#128101;</span>Employees</button>
         <button data-tab="requests"><span class="ic">&#128197;</span>Time Off Requests</button>
         <button data-tab="attendance"><span class="ic">&#8986;</span>Attendance Record<span class="soon">SOON</span></button>
-        <button data-tab="corrective"><span class="ic">&#9888;</span>Corrective Actions<span class="soon">SOON</span></button>
+        <button data-tab="corrective"><span class="ic">&#9888;</span>Corrective Actions</button>
         <button data-tab="summary"><span class="ic">&#128202;</span>Summary<span class="soon">SOON</span></button>
         <button data-tab="settings"><span class="ic">&#9881;</span>Settings</button>
       </nav>
@@ -350,6 +350,40 @@
   </div>
 </dialog>
 
+<dialog id="correctiveDialog">
+  <div class="dialog-inner">
+    <h2 id="correctiveDialogTitle">Add Corrective Action</h2>
+    <form class="grid" id="correctiveForm">
+      <div class="full">
+        <label>Employee</label>
+        <select id="caEmployee" required></select>
+      </div>
+      <div class="full">
+        <label>Date</label>
+        <input type="date" id="caDate" required>
+      </div>
+      <div class="full">
+        <label>Type of Corrective Action</label>
+        <select id="caType" required></select>
+        <input type="text" id="caTypeOther" placeholder="Specify type" hidden style="margin-top:8px;">
+      </div>
+      <div class="full">
+        <label>Reason for Corrective Action</label>
+        <select id="caReason" required></select>
+        <input type="text" id="caReasonOther" placeholder="Specify reason" hidden style="margin-top:8px;">
+      </div>
+      <div class="full">
+        <label>Description of Incident / Performance Concern (optional)</label>
+        <textarea id="caDescription" placeholder="Details of the incident or performance concern…"></textarea>
+      </div>
+      <div class="full dialog-actions">
+        <button type="button" class="btn" id="caCancel">Cancel</button>
+        <button type="submit" class="btn primary" id="caSubmit">Add Corrective Action</button>
+      </div>
+    </form>
+  </div>
+</dialog>
+
 <script>
 (function(){
 "use strict";
@@ -367,8 +401,14 @@ var DEFAULT_SETTINGS = {
 
 var DONUT_COLORS = ["#1f7d76","#df4a40","#d99425","#73847f","#2e9e5b","#6b5fd6"];
 
-var state = { session:null, dbReady:false, employees:[], requests:[], settings:null, tab:"dashboard", editingEmployeeId:null, editingRequestId:null };
-var sortState = { employees:{key:"name",dir:1}, requests:{key:"firstDay",dir:-1} };
+var CORRECTIVE_TYPES = ["Verbal Counseling (Documented)","First Written Warning","Final Written Warning","Suspension","Other"];
+var CORRECTIVE_REASONS = ["Attendance / Tardiness","Unscheduled Absence","Failure to Follow Company Policies or Procedures",
+  "Incomplete or Inaccurate Documentation","Patient Care / Customer Service Concern","Productivity / Performance",
+  "Communication / Teamwork","Professional Conduct","Safety Violation","Failure to Complete Assigned Duties",
+  "Confidentiality / HIPAA Violation","Other"];
+
+var state = { session:null, dbReady:false, employees:[], requests:[], correctiveActions:[], settings:null, tab:"dashboard", editingEmployeeId:null, editingRequestId:null, editingCorrectiveId:null };
+var sortState = { employees:{key:"name",dir:1}, requests:{key:"firstDay",dir:-1}, corrective:{key:"date",dir:-1} };
 
 // ---------- row <-> app field mapping ----------
 function empFromRow(row){
@@ -388,6 +428,18 @@ function reqToRow(r){
   return {
     employee_id:r.employeeId, employee_name:r.employeeName, first_day:r.firstDay, last_day:r.lastDay,
     hours:r.hours, status:r.status, approved_by:r.approvedBy||null, notes:r.notes||null
+  };
+}
+function caFromRow(row){
+  return {
+    id:row.id, employeeId:row.employee_id, employeeName:row.employee_name, date:row.date,
+    type:row.type, reason:row.reason, description:row.description, createdAt:row.created_at
+  };
+}
+function caToRow(c){
+  return {
+    employee_id:c.employeeId, employee_name:c.employeeName, date:c.date,
+    type:c.type, reason:c.reason, description:c.description||null
   };
 }
 function settingsFromRow(row){
@@ -477,6 +529,17 @@ function setStatus(mode, text){
   document.getElementById("statusText").textContent = text;
 }
 
+// Surfaces a save/delete failure instead of failing silently (e.g. a table
+// that hasn't been created yet, or a missing grant). Returns true on success.
+function reportIfError(res, label){
+  if(res && res.error){
+    console.error(label, res.error);
+    alert("Could not "+label+":\n"+res.error.message);
+    return false;
+  }
+  return true;
+}
+
 // ---------- Auth ----------
 document.getElementById("loginForm").addEventListener("submit", async function(e){
   e.preventDefault();
@@ -518,7 +581,7 @@ async function initAuth(){
 // ---------- Data loading + realtime ----------
 async function loadData(){
   setStatus("connecting","Connecting…");
-  await Promise.all([fetchEmployees(), fetchRequests(), fetchSettings()]);
+  await Promise.all([fetchEmployees(), fetchRequests(), fetchSettings(), fetchCorrectiveActions()]);
   state.dbReady = true;
   setStatus("live","Live — synced with the team");
   render();
@@ -532,22 +595,35 @@ async function loadData(){
   supabase.channel("settings-changes")
     .on("postgres_changes", {event:"*", schema:"public", table:"settings"}, function(){ fetchSettings().then(render); })
     .subscribe();
+  supabase.channel("corrective-changes")
+    .on("postgres_changes", {event:"*", schema:"public", table:"corrective_actions"}, function(){ fetchCorrectiveActions().then(render); })
+    .subscribe();
 }
 async function fetchEmployees(){
   var res = await supabase.from("employees").select("*").order("name");
-  if(!res.error) state.employees = (res.data||[]).map(empFromRow);
+  if(res.error) console.error("fetchEmployees", res.error);
+  else state.employees = (res.data||[]).map(empFromRow);
 }
 async function fetchRequests(){
   var res = await supabase.from("requests").select("*").order("first_day", {ascending:false});
-  if(!res.error) state.requests = (res.data||[]).map(reqFromRow);
+  if(res.error) console.error("fetchRequests", res.error);
+  else state.requests = (res.data||[]).map(reqFromRow);
+}
+async function fetchCorrectiveActions(){
+  var res = await supabase.from("corrective_actions").select("*").order("date", {ascending:false});
+  if(res.error) console.error("fetchCorrectiveActions", res.error);
+  else state.correctiveActions = (res.data||[]).map(caFromRow);
 }
 async function fetchSettings(){
   var res = await supabase.from("settings").select("*").eq("id",1).maybeSingle();
+  if(res.error) console.error("fetchSettings", res.error);
   state.settings = res.error ? Object.assign({},DEFAULT_SETTINGS) : settingsFromRow(res.data);
 }
 async function ensureSettingsDoc(next){
+  var prev = state.settings;
   state.settings = next;
-  await supabase.from("settings").update(settingsToRow(next)).eq("id",1);
+  var res = await supabase.from("settings").update(settingsToRow(next)).eq("id",1);
+  if(!reportIfError(res, "save settings")) state.settings = prev;
 }
 
 // ---------- Tabs ----------
@@ -562,7 +638,6 @@ var TAB_META = {
 };
 var SOON_META = {
   attendance:{icon:"&#8986;", text:"Clock-in/out history, late arrivals, and attendance trends per employee will live here."},
-  corrective:{icon:"&#9888;", text:"Track write-ups, verbal and written warnings, and performance improvement notes per employee."},
   summary:{icon:"&#128202;", text:"A roll-up view across employees, clinics, and time — built once the sections above are in daily use."}
 };
 
@@ -586,6 +661,7 @@ function render(){
   if(state.tab==="dashboard") renderDashboard();
   else if(state.tab==="employees") renderEmployees();
   else if(state.tab==="requests") renderRequests();
+  else if(state.tab==="corrective") renderCorrective();
   else if(state.tab==="settings") renderSettings();
   else if(SOON_META[state.tab]) renderComingSoon(state.tab);
 }
@@ -710,7 +786,7 @@ function renderEmployeeTable(rows, showActions, compact){
   var body = rows.map(function(r){
     var e=r.emp, p=r.pto;
     var remCls = p.remaining < 0 ? "style='color:var(--red);font-weight:700;'" : "style='font-weight:700;'";
-    var actions = showActions ? "<td><div class='rowgap'><button class='iconbtn' data-edit-emp='"+e.id+"' title='Edit'>&#9998;</button><button class='iconbtn' data-del-emp='"+e.id+"' title='Delete'>&#128465;</button></div></td>" : "";
+    var actions = showActions ? "<td><div class='rowgap'><button class='iconbtn' data-ca-history='"+e.id+"' title='Corrective action history'>&#9888;</button><button class='iconbtn' data-edit-emp='"+e.id+"' title='Edit'>&#9998;</button><button class='iconbtn' data-del-emp='"+e.id+"' title='Delete'>&#128465;</button></div></td>" : "";
     var extraCols = compact ? "" :
       "<td>"+fmtDisplay(e.hireDate)+"</td>"+
       "<td>"+p.years+"</td>";
@@ -745,6 +821,12 @@ function renderEmployees(){
   document.getElementById("btnAddEmp").addEventListener("click", function(){ openEmployeeDialog(null); });
   document.querySelectorAll("[data-edit-emp]").forEach(function(b){ b.addEventListener("click", function(){ openEmployeeDialog(b.dataset.editEmp); }); });
   document.querySelectorAll("[data-del-emp]").forEach(function(b){ b.addEventListener("click", function(){ deleteEmployee(b.dataset.delEmp); }); });
+  document.querySelectorAll("[data-ca-history]").forEach(function(b){ b.addEventListener("click", function(){
+    var navBtn = document.querySelector('#nav button[data-tab="corrective"]');
+    navBtn.click();
+    document.getElementById("content").dataset.filterCaEmp = b.dataset.caHistory;
+    renderCorrective();
+  }); });
   bindSortHeaders("employees", function(){ renderEmployees(); });
 }
 function sortValueEmp(r, key){
@@ -831,7 +913,7 @@ function renderRequests(){
   bindSortHeaders("requests", function(){ renderRequests(); });
 }
 async function quickSetStatus(id, status){
-  await supabase.from("requests").update({status:status}).eq("id",id);
+  reportIfError(await supabase.from("requests").update({status:status}).eq("id",id), "update request status");
 }
 
 // ---------- Employee dialog ----------
@@ -868,18 +950,20 @@ document.getElementById("employeeForm").addEventListener("submit", async functio
     hireDate: document.getElementById("empHireDate").value
   };
   if(!data.name || !data.hireDate) return;
+  var res;
   if(state.editingEmployeeId){
-    await supabase.from("employees").update(empToRow(data)).eq("id", state.editingEmployeeId);
+    res = await supabase.from("employees").update(empToRow(data)).eq("id", state.editingEmployeeId);
   } else {
     var id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ("emp-"+Date.now());
-    await supabase.from("employees").insert(Object.assign({id:id}, empToRow(data)));
+    res = await supabase.from("employees").insert(Object.assign({id:id}, empToRow(data)));
   }
+  if(!reportIfError(res, "save employee")) return;
   empDialog.close();
 });
 async function deleteEmployee(id){
   var e = state.employees.find(function(x){return x.id===id;});
   if(!confirm("Delete "+(e?e.name:"this employee")+"? Their past time-off requests will remain on record.")) return;
-  await supabase.from("employees").delete().eq("id", id);
+  reportIfError(await supabase.from("employees").delete().eq("id", id), "delete employee");
 }
 
 // ---------- Request dialog ----------
@@ -927,17 +1011,150 @@ document.getElementById("requestForm").addEventListener("submit", async function
     notes: document.getElementById("reqNotes").value.trim()
   };
   if(!data.employeeId || !data.firstDay || !data.lastDay || data.hours<=0) return;
+  var res;
   if(state.editingRequestId){
-    await supabase.from("requests").update(reqToRow(data)).eq("id", state.editingRequestId);
+    res = await supabase.from("requests").update(reqToRow(data)).eq("id", state.editingRequestId);
   } else {
     var id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ("req-"+Date.now());
-    await supabase.from("requests").insert(Object.assign({id:id}, reqToRow(data)));
+    res = await supabase.from("requests").insert(Object.assign({id:id}, reqToRow(data)));
   }
+  if(!reportIfError(res, "save request")) return;
   reqDialog.close();
 });
 async function deleteRequest(id){
   if(!confirm("Delete this time off request?")) return;
-  await supabase.from("requests").delete().eq("id", id);
+  reportIfError(await supabase.from("requests").delete().eq("id", id), "delete request");
+}
+
+// ---------- Corrective Actions ----------
+function renderCorrective(){
+  var el = document.getElementById("content");
+  var filterEmp = el.dataset.filterCaEmp || "";
+  var list = state.correctiveActions.slice();
+  if(filterEmp) list = list.filter(function(r){ return r.employeeId===filterEmp; });
+  var st = sortState.corrective;
+  list = sortRows(list, st.key, st.dir, function(r){ return st.key==="employeeName" ? r.employeeName.toLowerCase() : (r[st.key]||""); });
+
+  var empOptions = state.employees.slice().sort(function(a,b){return a.name.localeCompare(b.name);});
+  var heading = filterEmp ? "History for "+esc((empOptions.find(function(e){return e.id===filterEmp;})||{}).name||"") : "All Corrective Actions";
+
+  var html = "<div class='card'>";
+  html += "<div class='card-head'><h2 style='margin:0;'>"+heading+" ("+list.length+")</h2><div class='rule'></div><div class='actions'><button class='btn primary' id='btnAddCa'>+ Add Corrective Action</button></div></div>";
+  html += "<div class='toolbar'><div><label>Employee</label><select id='filterCaEmp'><option value=''>All employees</option>"+
+    empOptions.map(function(e){return "<option value='"+e.id+"'"+(e.id===filterEmp?" selected":"")+">"+esc(e.name)+"</option>";}).join("")+
+    "</select></div></div>";
+  html += renderCorrectiveTable(list);
+  html += "</div>";
+  el.innerHTML = html;
+
+  document.getElementById("filterCaEmp").addEventListener("change", function(e){ el.dataset.filterCaEmp = e.target.value; renderCorrective(); });
+  document.getElementById("btnAddCa").addEventListener("click", function(){ openCorrectiveDialog(null); });
+  document.querySelectorAll("[data-edit-ca]").forEach(function(b){ b.addEventListener("click", function(){ openCorrectiveDialog(b.dataset.editCa); }); });
+  document.querySelectorAll("[data-del-ca]").forEach(function(b){ b.addEventListener("click", function(){ deleteCorrective(b.dataset.delCa); }); });
+  bindSortHeaders("corrective", function(){ renderCorrective(); });
+}
+function renderCorrectiveTable(list){
+  if(!list.length) return "<div class='empty'>No corrective actions on record.</div>";
+  var head = "<th data-sort='employeeName'>Employee</th><th data-sort='date'>Date</th><th data-sort='type'>Type</th><th data-sort='reason'>Reason</th><th class='nosort'>Description</th><th class='nosort'></th>";
+  var body = list.map(function(c){
+    return "<tr>"+
+      "<td>"+esc(c.employeeName)+"</td>"+
+      "<td>"+fmtDisplay(c.date)+"</td>"+
+      "<td>"+esc(c.type)+"</td>"+
+      "<td>"+esc(c.reason)+"</td>"+
+      "<td class='wrap'>"+esc(c.description||"—")+"</td>"+
+      "<td><div class='rowgap'>"+
+        "<button class='iconbtn' data-edit-ca='"+c.id+"' title='Edit'>&#9998;</button>"+
+        "<button class='iconbtn' data-del-ca='"+c.id+"' title='Delete'>&#128465;</button></div></td>"+
+      "</tr>";
+  }).join("");
+  return "<div class='tablewrap'><table><thead><tr>"+head+"</tr></thead><tbody>"+body+"</tbody></table></div>";
+}
+
+var caDialog = document.getElementById("correctiveDialog");
+function fillSelectOptions(sel, options){
+  sel.innerHTML = options.map(function(o){ return "<option value='"+esc(o)+"'>"+esc(o==="Other"?"Other (specify)":o)+"</option>"; }).join("");
+}
+function refreshCorrectiveEmployeeSelect(){
+  var sel = document.getElementById("caEmployee");
+  sel.innerHTML = state.employees.slice().sort(function(a,b){return a.name.localeCompare(b.name);})
+    .map(function(e){ return "<option value='"+e.id+"'>"+esc(e.name)+" ("+esc(e.clinic)+")</option>"; }).join("");
+}
+function splitOtherValue(value, knownList){
+  if(value && knownList.indexOf(value)===-1) return {select:"Other", other:value};
+  return {select:value||knownList[0], other:""};
+}
+document.getElementById("caType").addEventListener("change", function(){
+  document.getElementById("caTypeOther").hidden = (this.value!=="Other");
+});
+document.getElementById("caReason").addEventListener("change", function(){
+  document.getElementById("caReasonOther").hidden = (this.value!=="Other");
+});
+function openCorrectiveDialog(id){
+  state.editingCorrectiveId = id;
+  refreshCorrectiveEmployeeSelect();
+  fillSelectOptions(document.getElementById("caType"), CORRECTIVE_TYPES);
+  fillSelectOptions(document.getElementById("caReason"), CORRECTIVE_REASONS);
+  var title = document.getElementById("correctiveDialogTitle");
+  var submit = document.getElementById("caSubmit");
+  document.getElementById("caTypeOther").hidden = true;
+  document.getElementById("caReasonOther").hidden = true;
+  document.getElementById("caTypeOther").value = "";
+  document.getElementById("caReasonOther").value = "";
+  if(id){
+    var c = state.correctiveActions.find(function(x){return x.id===id;});
+    title.textContent = "Edit Corrective Action"; submit.textContent = "Save Changes";
+    document.getElementById("caEmployee").value = c.employeeId;
+    document.getElementById("caDate").value = c.date;
+    var t = splitOtherValue(c.type, CORRECTIVE_TYPES);
+    document.getElementById("caType").value = t.select;
+    document.getElementById("caTypeOther").hidden = (t.select!=="Other");
+    document.getElementById("caTypeOther").value = t.other;
+    var r = splitOtherValue(c.reason, CORRECTIVE_REASONS);
+    document.getElementById("caReason").value = r.select;
+    document.getElementById("caReasonOther").hidden = (r.select!=="Other");
+    document.getElementById("caReasonOther").value = r.other;
+    document.getElementById("caDescription").value = c.description||"";
+  } else {
+    title.textContent = "Add Corrective Action"; submit.textContent = "Add Corrective Action";
+    document.getElementById("correctiveForm").reset();
+    document.getElementById("caDate").value = fmtISO(todayLocal());
+  }
+  caDialog.showModal();
+}
+document.getElementById("caCancel").addEventListener("click", function(){ caDialog.close(); });
+document.getElementById("correctiveForm").addEventListener("submit", async function(e){
+  e.preventDefault();
+  var empSel = document.getElementById("caEmployee");
+  var emp = state.employees.find(function(x){return x.id===empSel.value;});
+  var typeSel = document.getElementById("caType").value;
+  var typeOther = document.getElementById("caTypeOther").value.trim();
+  var reasonSel = document.getElementById("caReason").value;
+  var reasonOther = document.getElementById("caReasonOther").value.trim();
+  if(typeSel==="Other" && !typeOther){ alert("Please specify the corrective action type."); return; }
+  if(reasonSel==="Other" && !reasonOther){ alert("Please specify the reason."); return; }
+  var data = {
+    employeeId: empSel.value,
+    employeeName: emp ? emp.name : "",
+    date: document.getElementById("caDate").value,
+    type: typeSel==="Other" ? typeOther : typeSel,
+    reason: reasonSel==="Other" ? reasonOther : reasonSel,
+    description: document.getElementById("caDescription").value.trim()
+  };
+  if(!data.employeeId || !data.date) return;
+  var res;
+  if(state.editingCorrectiveId){
+    res = await supabase.from("corrective_actions").update(caToRow(data)).eq("id", state.editingCorrectiveId);
+  } else {
+    var id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ("ca-"+Date.now());
+    res = await supabase.from("corrective_actions").insert(Object.assign({id:id}, caToRow(data)));
+  }
+  if(!reportIfError(res, "save corrective action")) return;
+  caDialog.close();
+});
+async function deleteCorrective(id){
+  if(!confirm("Delete this corrective action record?")) return;
+  reportIfError(await supabase.from("corrective_actions").delete().eq("id", id), "delete corrective action");
 }
 
 // ---------- Settings ----------
