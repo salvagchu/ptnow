@@ -8,7 +8,9 @@ create table if not exists employees (
   name text not null,
   clinic text not null,
   hire_date date not null,
-  status text not null default 'Active'
+  status text not null default 'Active',
+  pto_exempt boolean not null default false,
+  birthday date
 );
 
 create table if not exists requests (
@@ -31,7 +33,7 @@ create table if not exists settings (
   tier3_hours numeric not null default 104,
   anniversary_window_days int not null default 30,
   low_balance_threshold numeric not null default 24,
-  clinics text[] not null default array['Orlando','Kissimmee','Altamonte Springs','Administration','Other']
+  clinics text[] not null default array['Orlando','Kissimmee','Altamonte Springs','Administration','Management','All','Other']
 );
 
 -- Row Level Security: only signed-in users (the manager + director accounts

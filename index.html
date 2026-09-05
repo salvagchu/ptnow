@@ -98,8 +98,8 @@
   header.topbar h1{margin:0; font-size:21px;}
   header.topbar .sub{color:var(--muted); font-size:13px; margin-top:2px;}
 
-  .stats-row{display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; margin-bottom:22px;}
-  @media (max-width:1100px){ .stats-row{grid-template-columns:repeat(3,1fr);} }
+  .stats-row{display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:12px; margin-bottom:22px;}
+  @media (max-width:1300px){ .stats-row{grid-template-columns:repeat(3,1fr);} }
   @media (max-width:640px){ .stats-row{grid-template-columns:repeat(2,1fr);} }
   .stat{
     background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
@@ -254,9 +254,8 @@
         <button data-tab="dashboard" class="active"><span class="ic">&#8962;</span>Dashboard</button>
         <button data-tab="employees"><span class="ic">&#128101;</span>Employees</button>
         <button data-tab="requests"><span class="ic">&#128197;</span>Time Off Requests</button>
-        <button data-tab="attendance"><span class="ic">&#8986;</span>Attendance Record<span class="soon">SOON</span></button>
+        <button data-tab="credentials"><span class="ic">&#127891;</span>Credentials &amp; Compliance</button>
         <button data-tab="corrective"><span class="ic">&#9888;</span>Corrective Actions</button>
-        <button data-tab="summary"><span class="ic">&#128202;</span>Summary<span class="soon">SOON</span></button>
         <button data-tab="settings"><span class="ic">&#9881;</span>Settings</button>
       </nav>
       <div class="side-card">
@@ -298,6 +297,14 @@
       <div class="full">
         <label>Hire Date</label>
         <input type="date" id="empHireDate" required>
+      </div>
+      <div class="full">
+        <label>Birthday (optional)</label>
+        <input type="date" id="empBirthday">
+      </div>
+      <div class="full" style="display:flex; align-items:center; gap:8px;">
+        <input type="checkbox" id="empPtoExempt" style="width:auto;">
+        <label style="margin:0;" for="empPtoExempt">PTO Exempt (does not accrue or track PTO hours)</label>
       </div>
       <div class="full dialog-actions">
         <button type="button" class="btn" id="empCancel">Cancel</button>
@@ -384,6 +391,42 @@
   </div>
 </dialog>
 
+<dialog id="providerDialog">
+  <div class="dialog-inner">
+    <h2 id="providerDialogTitle">Add Provider</h2>
+    <form class="grid" id="providerForm">
+      <div class="full">
+        <label>Person</label>
+        <select id="provPerson" required></select>
+        <input type="text" id="provNewName" placeholder="Full name" hidden style="margin-top:8px;">
+      </div>
+      <div>
+        <label>Occupation</label>
+        <select id="provOccupation" required>
+          <option>DC</option><option>DPT/PT</option><option>PTA</option><option>CCPA</option><option>MD</option>
+        </select>
+      </div>
+      <div>
+        <label>License Number</label>
+        <input type="text" id="provLicense" placeholder="License #">
+      </div>
+      <div class="full">
+        <label>Expiration Day</label>
+        <input type="date" id="provExpiration">
+      </div>
+      <div class="full">
+        <label>License / Certification PDF (optional)</label>
+        <input type="file" id="provDocument" accept="application/pdf">
+        <div id="provDocumentCurrent" class="hint" style="margin-top:6px;"></div>
+      </div>
+      <div class="full dialog-actions">
+        <button type="button" class="btn" id="provCancel">Cancel</button>
+        <button type="submit" class="btn primary" id="provSubmit">Add Provider</button>
+      </div>
+    </form>
+  </div>
+</dialog>
+
 <script>
 (function(){
 "use strict";
@@ -396,7 +439,7 @@ var supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 var DEFAULT_SETTINGS = {
   tier0Hours: 0, tier1Hours: 64, tier3Hours: 104,
   anniversaryWindowDays: 30, lowBalanceThreshold: 24,
-  clinics: ["Orlando","Kissimmee","Altamonte Springs","Administration","Other"]
+  clinics: ["Orlando","Kissimmee","Altamonte Springs","Administration","Management","All","Other"]
 };
 
 var DONUT_COLORS = ["#1f7d76","#df4a40","#d99425","#73847f","#2e9e5b","#6b5fd6"];
@@ -407,15 +450,19 @@ var CORRECTIVE_REASONS = ["Attendance / Tardiness","Unscheduled Absence","Failur
   "Communication / Teamwork","Professional Conduct","Safety Violation","Failure to Complete Assigned Duties",
   "Confidentiality / HIPAA Violation","Other"];
 
-var state = { session:null, dbReady:false, employees:[], requests:[], correctiveActions:[], settings:null, tab:"dashboard", editingEmployeeId:null, editingRequestId:null, editingCorrectiveId:null };
-var sortState = { employees:{key:"name",dir:1}, requests:{key:"firstDay",dir:-1}, corrective:{key:"date",dir:-1} };
+var LICENSE_EXPIRY_WARNING_DAYS = 60;
+var CREDENTIAL_ALERT_DAYS = 30;
+var BIRTHDAY_ALERT_DAYS = 10;
+
+var state = { session:null, dbReady:false, employees:[], requests:[], correctiveActions:[], providers:[], settings:null, tab:"dashboard", editingEmployeeId:null, editingRequestId:null, editingCorrectiveId:null, editingProviderId:null };
+var sortState = { employees:{key:"name",dir:1}, requests:{key:"firstDay",dir:-1}, corrective:{key:"date",dir:-1}, providers:{key:"expirationDate",dir:1} };
 
 // ---------- row <-> app field mapping ----------
 function empFromRow(row){
-  return { id:row.id, name:row.name, clinic:row.clinic, hireDate:row.hire_date, status:row.status };
+  return { id:row.id, name:row.name, clinic:row.clinic, hireDate:row.hire_date, status:row.status, ptoExempt:!!row.pto_exempt, birthday:row.birthday };
 }
 function empToRow(e){
-  return { name:e.name, clinic:e.clinic, hire_date:e.hireDate, status:e.status };
+  return { name:e.name, clinic:e.clinic, hire_date:e.hireDate, status:e.status, pto_exempt:!!e.ptoExempt, birthday:e.birthday||null };
 }
 function reqFromRow(row){
   return {
@@ -428,6 +475,20 @@ function reqToRow(r){
   return {
     employee_id:r.employeeId, employee_name:r.employeeName, first_day:r.firstDay, last_day:r.lastDay,
     hours:r.hours, status:r.status, approved_by:r.approvedBy||null, notes:r.notes||null
+  };
+}
+function providerFromRow(row){
+  return {
+    id:row.id, employeeId:row.employee_id, personName:row.person_name, occupation:row.occupation,
+    licenseNumber:row.license_number, expirationDate:row.expiration_date, createdAt:row.created_at,
+    documentPath:row.document_path, documentName:row.document_name
+  };
+}
+function providerToRow(p){
+  return {
+    employee_id:p.employeeId||null, person_name:p.personName, occupation:p.occupation,
+    license_number:p.licenseNumber||null, expiration_date:p.expirationDate||null,
+    document_path:p.documentPath||null, document_name:p.documentName||null
   };
 }
 function caFromRow(row){
@@ -476,6 +537,12 @@ function todayLocal(){
   return new Date(n.getFullYear(), n.getMonth(), n.getDate());
 }
 function addMonths(d, n){ return new Date(d.getFullYear(), d.getMonth()+n, d.getDate()); }
+function nextOccurrence(dateStr, today){
+  var d = parseDate(dateStr);
+  if(!d) return null;
+  var thisYear = new Date(today.getFullYear(), d.getMonth(), d.getDate());
+  return thisYear < today ? new Date(today.getFullYear()+1, d.getMonth(), d.getDate()) : thisYear;
+}
 
 // ---------- PTO computation (mirrors the clinic's Excel formulas) ----------
 function computeEmployeePTO(emp, requests, settings, today){
@@ -491,6 +558,14 @@ function computeEmployeePTO(emp, requests, settings, today){
     ? new Date(today.getFullYear()+1, hire.getMonth(), hire.getDate())
     : annivThisYear;
 
+  if(emp.ptoExempt){
+    return {
+      years: years, cycleStart: cycleStart, cycleEnd: cycleEnd,
+      entitlement: null, used: null, pending: null, remaining: null,
+      nextAnniversary: nextAnniv, exempt: true
+    };
+  }
+
   var used = 0, pending = 0;
   requests.forEach(function(r){
     if(r.employeeId !== emp.id) return;
@@ -502,7 +577,7 @@ function computeEmployeePTO(emp, requests, settings, today){
   return {
     years: years, cycleStart: cycleStart, cycleEnd: cycleEnd,
     entitlement: entitlement, used: used, pending: pending,
-    remaining: entitlement - used, nextAnniversary: nextAnniv
+    remaining: entitlement - used, nextAnniversary: nextAnniv, exempt: false
   };
 }
 
@@ -581,7 +656,7 @@ async function initAuth(){
 // ---------- Data loading + realtime ----------
 async function loadData(){
   setStatus("connecting","Connecting…");
-  await Promise.all([fetchEmployees(), fetchRequests(), fetchSettings(), fetchCorrectiveActions()]);
+  await Promise.all([fetchEmployees(), fetchRequests(), fetchSettings(), fetchCorrectiveActions(), fetchProviders()]);
   state.dbReady = true;
   setStatus("live","Live — synced with the team");
   render();
@@ -598,6 +673,9 @@ async function loadData(){
   supabase.channel("corrective-changes")
     .on("postgres_changes", {event:"*", schema:"public", table:"corrective_actions"}, function(){ fetchCorrectiveActions().then(render); })
     .subscribe();
+  supabase.channel("providers-changes")
+    .on("postgres_changes", {event:"*", schema:"public", table:"providers"}, function(){ fetchProviders().then(render); })
+    .subscribe();
 }
 async function fetchEmployees(){
   var res = await supabase.from("employees").select("*").order("name");
@@ -613,6 +691,11 @@ async function fetchCorrectiveActions(){
   var res = await supabase.from("corrective_actions").select("*").order("date", {ascending:false});
   if(res.error) console.error("fetchCorrectiveActions", res.error);
   else state.correctiveActions = (res.data||[]).map(caFromRow);
+}
+async function fetchProviders(){
+  var res = await supabase.from("providers").select("*").order("expiration_date");
+  if(res.error) console.error("fetchProviders", res.error);
+  else state.providers = (res.data||[]).map(providerFromRow);
 }
 async function fetchSettings(){
   var res = await supabase.from("settings").select("*").eq("id",1).maybeSingle();
@@ -631,15 +714,11 @@ var TAB_META = {
   dashboard:{title:"Dashboard", sub:"Overview of employees, hours, and PTO"},
   employees:{title:"Employees", sub:"Roster, clinics, and PTO balances"},
   requests:{title:"Time Off Requests", sub:"Review, approve, and track requests"},
-  attendance:{title:"Attendance Record", sub:"Clock-in history and attendance patterns"},
+  credentials:{title:"Credentials & Compliance", sub:"Provider licenses, certifications, and expiration tracking"},
   corrective:{title:"Corrective Actions", sub:"Write-ups, warnings, and performance notes"},
-  summary:{title:"Summary", sub:"Roll-up reporting across the team"},
   settings:{title:"Settings", sub:"PTO policy, clinics, and alert thresholds"}
 };
-var SOON_META = {
-  attendance:{icon:"&#8986;", text:"Clock-in/out history, late arrivals, and attendance trends per employee will live here."},
-  summary:{icon:"&#128202;", text:"A roll-up view across employees, clinics, and time — built once the sections above are in daily use."}
-};
+var SOON_META = {};
 
 document.getElementById("nav").addEventListener("click", function(e){
   var btn = e.target.closest("button[data-tab]");
@@ -662,6 +741,7 @@ function render(){
   else if(state.tab==="employees") renderEmployees();
   else if(state.tab==="requests") renderRequests();
   else if(state.tab==="corrective") renderCorrective();
+  else if(state.tab==="credentials") renderCredentials();
   else if(state.tab==="settings") renderSettings();
   else if(SOON_META[state.tab]) renderComingSoon(state.tab);
 }
@@ -679,17 +759,29 @@ function allStats(){
   var rows = state.employees.map(function(e){ return {emp:e, pto: computeEmployeePTO(e, state.requests, state.settings, today)}; }).filter(function(r){ return r.pto; });
   var totalActive = activeEmployees().length;
   var pendingCount = state.requests.filter(function(r){ return r.status==="Pending"; }).length;
-  var totalUsed = rows.reduce(function(s,r){ return s+r.pto.used; },0);
-  var totalRemaining = rows.reduce(function(s,r){ return s+r.pto.remaining; },0);
+  var totalUsed = rows.reduce(function(s,r){ return r.pto.exempt ? s : s+r.pto.used; },0);
   var windowEnd = new Date(today.getTime() + state.settings.anniversaryWindowDays*86400000);
-  var upcomingAnniv = rows.filter(function(r){ return r.pto.nextAnniversary >= today && r.pto.nextAnniversary <= windowEnd; });
-  return { today:today, rows:rows, totalActive:totalActive, pendingCount:pendingCount, totalUsed:totalUsed, totalRemaining:totalRemaining, upcomingAnniv:upcomingAnniv };
+  var upcomingAnniv = rows.filter(function(r){ return !r.pto.exempt && r.pto.nextAnniversary >= today && r.pto.nextAnniversary <= windowEnd; });
+
+  var birthdayWindowEnd = new Date(today.getTime() + BIRTHDAY_ALERT_DAYS*86400000);
+  var upcomingBirthdays = state.employees.filter(function(e){ return e.birthday; }).map(function(e){
+    return { emp:e, nextBirthday: nextOccurrence(e.birthday, today) };
+  }).filter(function(r){ return r.nextBirthday >= today && r.nextBirthday <= birthdayWindowEnd; })
+    .sort(function(a,b){ return a.nextBirthday-b.nextBirthday; });
+
+  var credentialWindowEnd = new Date(today.getTime() + CREDENTIAL_ALERT_DAYS*86400000);
+  var expiringCredentials = state.providers.filter(function(p){ return p.expirationDate; }).map(function(p){
+    return { provider:p, days: Math.round((parseDate(p.expirationDate)-today)/86400000) };
+  }).filter(function(r){ return parseDate(r.provider.expirationDate) <= credentialWindowEnd; })
+    .sort(function(a,b){ return a.days-b.days; });
+
+  return { today:today, rows:rows, totalActive:totalActive, pendingCount:pendingCount, totalUsed:totalUsed, upcomingAnniv:upcomingAnniv, upcomingBirthdays:upcomingBirthdays, expiringCredentials:expiringCredentials };
 }
 
 // ---------- Dashboard ----------
 function renderDashboard(){
   var s = allStats();
-  var lowBalance = s.rows.filter(function(r){ return r.emp.status==="Active" && r.pto.remaining <= state.settings.lowBalanceThreshold; })
+  var lowBalance = s.rows.filter(function(r){ return r.emp.status==="Active" && !r.pto.exempt && r.pto.remaining <= state.settings.lowBalanceThreshold; })
     .sort(function(a,b){ return a.pto.remaining-b.pto.remaining; });
   var pendingList = state.requests.filter(function(r){ return r.status==="Pending"; }).sort(byFirstDayDesc);
 
@@ -698,8 +790,9 @@ function renderDashboard(){
     stat("&#128101;","teal","Total Employees", s.totalActive, "", "Active") +
     stat("&#128197;","red","Pending Requests", s.pendingCount, s.pendingCount>0?"red":"", "Awaiting approval") +
     stat("&#128337;","teal","Total PTO Used", fmtHours(s.totalUsed), "", "Hours, current cycles") +
-    stat("&#9730;","red","Total PTO Remaining", fmtHours(s.totalRemaining), "teal", "Hours, all employees") +
     stat("&#127874;","teal","Upcoming Anniversaries", s.upcomingAnniv.length, "", "Next "+state.settings.anniversaryWindowDays+" days") +
+    stat("&#128220;","red","Credentials Expiring", s.expiringCredentials.length, s.expiringCredentials.length>0?"red":"", "Next "+CREDENTIAL_ALERT_DAYS+" days") +
+    stat("&#127873;","teal","Upcoming Birthdays", s.upcomingBirthdays.length, "", "Next "+BIRTHDAY_ALERT_DAYS+" days") +
     "</div>";
 
   html += "<div class='grid2'>";
@@ -714,6 +807,18 @@ function renderDashboard(){
     (s.upcomingAnniv.length ? s.upcomingAnniv.sort(function(a,b){return a.pto.nextAnniversary-b.pto.nextAnniversary;}).map(function(r){
       return "<div class='list-row'><div><div class='name'>"+esc(r.emp.name)+"</div><div class='meta'>"+esc(r.emp.clinic)+"</div></div><div>"+fmtDisplay(fmtISO(r.pto.nextAnniversary))+"</div></div>";
     }).join("") : "<div class='empty'>None in this window.</div>")+
+    "</div>";
+  html += "<div class='card'><h2>Credentials Expiring</h2>"+
+    (s.expiringCredentials.length ? s.expiringCredentials.slice(0,6).map(function(r){
+      var badgeCls = r.days<0 ? "red" : "amber";
+      var badgeText = r.days<0 ? "Expired" : "In "+r.days+"d";
+      return "<div class='list-row'><div><div class='name'>"+esc(r.provider.personName)+"</div><div class='meta'>"+esc(r.provider.occupation)+" &middot; "+fmtDisplay(r.provider.expirationDate)+"</div></div><span class='badge "+badgeCls+"'>"+badgeText+"</span></div>";
+    }).join("") : "<div class='empty'>No licenses expiring in the next "+CREDENTIAL_ALERT_DAYS+" days.</div>")+
+    "</div>";
+  html += "<div class='card'><h2>Upcoming Birthdays</h2>"+
+    (s.upcomingBirthdays.length ? s.upcomingBirthdays.map(function(r){
+      return "<div class='list-row'><div><div class='name'>"+esc(r.emp.name)+"</div><div class='meta'>"+esc(r.emp.clinic)+"</div></div><div>"+fmtDisplay(fmtISO(r.nextBirthday))+"</div></div>";
+    }).join("") : "<div class='empty'>None in the next "+BIRTHDAY_ALERT_DAYS+" days.</div>")+
     "</div>";
   html += "<div class='card'><h2>Low PTO Balances</h2>"+
     (lowBalance.length ? lowBalance.slice(0,6).map(function(r){
@@ -785,20 +890,23 @@ function renderEmployeeTable(rows, showActions, compact){
   var head = cols.map(function(c){ return showActions ? "<th data-sort='"+c[0]+"'>"+c[1]+"</th>" : "<th class='nosort'>"+c[1]+"</th>"; }).join("") + (showActions?"<th class='nosort'></th>":"");
   var body = rows.map(function(r){
     var e=r.emp, p=r.pto;
-    var remCls = p.remaining < 0 ? "style='color:var(--red);font-weight:700;'" : "style='font-weight:700;'";
+    var remCls = (!p.exempt && p.remaining < 0) ? "style='color:var(--red);font-weight:700;'" : "style='font-weight:700;'";
     var actions = showActions ? "<td><div class='rowgap'><button class='iconbtn' data-ca-history='"+e.id+"' title='Corrective action history'>&#9888;</button><button class='iconbtn' data-edit-emp='"+e.id+"' title='Edit'>&#9998;</button><button class='iconbtn' data-del-emp='"+e.id+"' title='Delete'>&#128465;</button></div></td>" : "";
     var extraCols = compact ? "" :
       "<td>"+fmtDisplay(e.hireDate)+"</td>"+
       "<td>"+p.years+"</td>";
-    var pendingCol = compact ? "" : "<td>"+(p.pending>0 ? "<span class='badge amber'>"+fmtHours(p.pending)+"</span>" : "0.00")+"</td>";
+    var pendingCol = compact ? "" : "<td>"+(!p.exempt && p.pending>0 ? "<span class='badge amber'>"+fmtHours(p.pending)+"</span>" : (p.exempt?"—":"0.00"))+"</td>";
+    var entitlementCell = p.exempt ? "—" : fmtHours(p.entitlement);
+    var usedCell = p.exempt ? "—" : fmtHours(p.used);
+    var remainingCell = p.exempt ? "—" : fmtHours(p.remaining);
     return "<tr>"+
-      "<td>"+esc(e.name)+" "+(e.status!=="Active" ? "<span class='badge "+empStatusBadgeClass(e.status)+"'>"+e.status+"</span>" : "")+"</td>"+
+      "<td>"+esc(e.name)+" "+(e.status!=="Active" ? "<span class='badge "+empStatusBadgeClass(e.status)+"'>"+e.status+"</span>" : "")+(p.exempt ? " <span class='badge teal'>PTO Exempt</span>" : "")+"</td>"+
       "<td>"+esc(e.clinic)+"</td>"+
       extraCols+
-      "<td>"+fmtHours(p.entitlement)+"</td>"+
-      "<td>"+fmtHours(p.used)+"</td>"+
+      "<td>"+entitlementCell+"</td>"+
+      "<td>"+usedCell+"</td>"+
       pendingCol+
-      "<td "+remCls+">"+fmtHours(p.remaining)+"</td>"+
+      "<td "+remCls+">"+remainingCell+"</td>"+
       "<td>"+fmtDisplay(fmtISO(p.nextAnniversary))+"</td>"+
       actions+
       "</tr>";
@@ -934,6 +1042,8 @@ function openEmployeeDialog(id){
     document.getElementById("empClinic").value = e.clinic;
     document.getElementById("empStatus").value = e.status;
     document.getElementById("empHireDate").value = e.hireDate;
+    document.getElementById("empBirthday").value = e.birthday||"";
+    document.getElementById("empPtoExempt").checked = !!e.ptoExempt;
   } else {
     title.textContent = "Add Employee"; submit.textContent = "Add Employee";
     document.getElementById("employeeForm").reset();
@@ -947,7 +1057,9 @@ document.getElementById("employeeForm").addEventListener("submit", async functio
     name: document.getElementById("empName").value.trim(),
     clinic: document.getElementById("empClinic").value,
     status: document.getElementById("empStatus").value,
-    hireDate: document.getElementById("empHireDate").value
+    hireDate: document.getElementById("empHireDate").value,
+    birthday: document.getElementById("empBirthday").value || null,
+    ptoExempt: document.getElementById("empPtoExempt").checked
   };
   if(!data.name || !data.hireDate) return;
   var res;
@@ -1155,6 +1267,170 @@ document.getElementById("correctiveForm").addEventListener("submit", async funct
 async function deleteCorrective(id){
   if(!confirm("Delete this corrective action record?")) return;
   reportIfError(await supabase.from("corrective_actions").delete().eq("id", id), "delete corrective action");
+}
+
+// ---------- Credentials & Compliance (Providers) ----------
+function expirationStatus(dateStr){
+  if(!dateStr) return {label:"—", cls:"grey"};
+  var days = Math.round((parseDate(dateStr) - todayLocal())/86400000);
+  if(days < 0) return {label:"Expired", cls:"red"};
+  if(days <= LICENSE_EXPIRY_WARNING_DAYS) return {label:"Expires in "+days+"d", cls:"amber"};
+  return {label:"Valid", cls:"green"};
+}
+function renderCredentials(){
+  var list = state.providers.slice();
+  var st = sortState.providers;
+  list = sortRows(list, st.key, st.dir, function(r){
+    if(st.key==="personName") return r.personName.toLowerCase();
+    return r[st.key]||"";
+  });
+
+  var html = "<div class='card'>";
+  html += "<div class='card-head'><h2 style='margin:0;'>All Providers ("+list.length+")</h2><div class='rule'></div><div class='actions'><button class='btn primary' id='btnAddProv'>+ Add Provider</button></div></div>";
+  html += renderProvidersTable(list);
+  html += "</div>";
+  document.getElementById("content").innerHTML = html;
+
+  document.getElementById("btnAddProv").addEventListener("click", function(){ openProviderDialog(null); });
+  document.querySelectorAll("[data-edit-prov]").forEach(function(b){ b.addEventListener("click", function(){ openProviderDialog(b.dataset.editProv); }); });
+  document.querySelectorAll("[data-del-prov]").forEach(function(b){ b.addEventListener("click", function(){ deleteProvider(b.dataset.delProv); }); });
+  document.querySelectorAll("[data-view-doc]").forEach(function(b){ b.addEventListener("click", function(){
+    var p = state.providers.find(function(x){return x.id===b.dataset.viewDoc;});
+    if(p && p.documentPath) openProviderDocument(p.documentPath);
+  }); });
+  bindSortHeaders("providers", function(){ renderCredentials(); });
+}
+function renderProvidersTable(list){
+  if(!list.length) return "<div class='empty'>No providers on record.</div>";
+  var head = "<th data-sort='personName'>Person</th><th data-sort='occupation'>Occupation</th><th class='nosort'>License Number</th><th data-sort='expirationDate'>Expiration</th><th class='nosort'>Status</th><th class='nosort'></th>";
+  var body = list.map(function(p){
+    var st = expirationStatus(p.expirationDate);
+    return "<tr>"+
+      "<td>"+esc(p.personName)+"</td>"+
+      "<td>"+esc(p.occupation)+"</td>"+
+      "<td>"+esc(p.licenseNumber||"—")+"</td>"+
+      "<td>"+fmtDisplay(p.expirationDate)+"</td>"+
+      "<td><span class='badge "+st.cls+"'>"+st.label+"</span></td>"+
+      "<td><div class='rowgap'>"+
+        (p.documentPath ? "<button class='iconbtn' data-view-doc='"+p.id+"' title='View PDF'>&#128196;</button>" : "")+
+        "<button class='iconbtn' data-edit-prov='"+p.id+"' title='Edit'>&#9998;</button>"+
+        "<button class='iconbtn' data-del-prov='"+p.id+"' title='Delete'>&#128465;</button></div></td>"+
+      "</tr>";
+  }).join("");
+  return "<div class='tablewrap'><table><thead><tr>"+head+"</tr></thead><tbody>"+body+"</tbody></table></div>";
+}
+
+var providerDialog = document.getElementById("providerDialog");
+function refreshProviderPersonSelect(){
+  var sel = document.getElementById("provPerson");
+  var employeeOpts = state.employees.slice().sort(function(a,b){return a.name.localeCompare(b.name);})
+    .map(function(e){ return "<option value='emp:"+e.id+"'>"+esc(e.name)+" ("+esc(e.clinic)+")</option>"; });
+  var adHocNames = [];
+  state.providers.forEach(function(p){
+    if(!p.employeeId && p.personName && adHocNames.indexOf(p.personName)===-1) adHocNames.push(p.personName);
+  });
+  adHocNames.sort(function(a,b){return a.localeCompare(b);});
+  var adHocOpts = adHocNames.map(function(n){ return "<option value='name:"+esc(n)+"'>"+esc(n)+" (non-employee)</option>"; });
+  sel.innerHTML = employeeOpts.join("") + adHocOpts.join("") + "<option value='__new__'>+ Add New Person…</option>";
+}
+document.getElementById("provPerson").addEventListener("change", function(){
+  document.getElementById("provNewName").hidden = (this.value!=="__new__");
+});
+async function openProviderDocument(path){
+  var res = await supabase.storage.from("provider-documents").createSignedUrl(path, 60);
+  if(res.error){ alert("Could not open file:\n"+res.error.message); return; }
+  window.open(res.data.signedUrl, "_blank");
+}
+function openProviderDialog(id){
+  state.editingProviderId = id;
+  refreshProviderPersonSelect();
+  var title = document.getElementById("providerDialogTitle");
+  var submit = document.getElementById("provSubmit");
+  document.getElementById("provNewName").hidden = true;
+  document.getElementById("provNewName").value = "";
+  document.getElementById("provDocument").value = "";
+  var currentBox = document.getElementById("provDocumentCurrent");
+  currentBox.innerHTML = "";
+  if(id){
+    var p = state.providers.find(function(x){return x.id===id;});
+    title.textContent = "Edit Provider"; submit.textContent = "Save Changes";
+    document.getElementById("provPerson").value = p.employeeId ? ("emp:"+p.employeeId) : ("name:"+p.personName);
+    document.getElementById("provOccupation").value = p.occupation;
+    document.getElementById("provLicense").value = p.licenseNumber||"";
+    document.getElementById("provExpiration").value = p.expirationDate||"";
+    if(p.documentPath){
+      currentBox.innerHTML = "Current file: <a href='#' id='provViewDoc'>"+esc(p.documentName||"document.pdf")+"</a>"+
+        " &nbsp; <label style='font-weight:400;'><input type='checkbox' id='provRemoveDocument' style='width:auto;'> Remove file</label>";
+      document.getElementById("provViewDoc").addEventListener("click", function(ev){
+        ev.preventDefault();
+        openProviderDocument(p.documentPath);
+      });
+    }
+  } else {
+    title.textContent = "Add Provider"; submit.textContent = "Add Provider";
+    document.getElementById("providerForm").reset();
+  }
+  providerDialog.showModal();
+}
+document.getElementById("provCancel").addEventListener("click", function(){ providerDialog.close(); });
+document.getElementById("providerForm").addEventListener("submit", async function(e){
+  e.preventDefault();
+  var personVal = document.getElementById("provPerson").value;
+  var employeeId = null, personName = "";
+  if(personVal==="__new__"){
+    personName = document.getElementById("provNewName").value.trim();
+    if(!personName){ alert("Please enter the person's name."); return; }
+  } else if(personVal.indexOf("emp:")===0){
+    employeeId = personVal.slice(4);
+    var emp = state.employees.find(function(x){return x.id===employeeId;});
+    personName = emp ? emp.name : "";
+  } else if(personVal.indexOf("name:")===0){
+    personName = personVal.slice(5);
+  }
+  var existing = state.editingProviderId ? state.providers.find(function(x){return x.id===state.editingProviderId;}) : null;
+  var documentPath = existing ? existing.documentPath : null;
+  var documentName = existing ? existing.documentName : null;
+
+  var removeBox = document.getElementById("provRemoveDocument");
+  if(removeBox && removeBox.checked && documentPath){
+    await supabase.storage.from("provider-documents").remove([documentPath]);
+    documentPath = null; documentName = null;
+  }
+
+  var newId = state.editingProviderId || ((window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ("prov-"+Date.now()));
+  var file = document.getElementById("provDocument").files[0];
+  if(file){
+    if(file.type !== "application/pdf"){ alert("Please choose a PDF file."); return; }
+    var path = "providers/"+newId+"-"+Date.now()+".pdf";
+    var upload = await supabase.storage.from("provider-documents").upload(path, file, {upsert:true, contentType:"application/pdf"});
+    if(!reportIfError(upload, "upload PDF")) return;
+    documentPath = path; documentName = file.name;
+  }
+
+  var data = {
+    employeeId: employeeId,
+    personName: personName,
+    occupation: document.getElementById("provOccupation").value,
+    licenseNumber: document.getElementById("provLicense").value.trim(),
+    expirationDate: document.getElementById("provExpiration").value || null,
+    documentPath: documentPath,
+    documentName: documentName
+  };
+  if(!data.personName) return;
+  var res;
+  if(state.editingProviderId){
+    res = await supabase.from("providers").update(providerToRow(data)).eq("id", state.editingProviderId);
+  } else {
+    res = await supabase.from("providers").insert(Object.assign({id:newId}, providerToRow(data)));
+  }
+  if(!reportIfError(res, "save provider")) return;
+  providerDialog.close();
+});
+async function deleteProvider(id){
+  if(!confirm("Delete this provider record?")) return;
+  var p = state.providers.find(function(x){return x.id===id;});
+  if(!reportIfError(await supabase.from("providers").delete().eq("id", id), "delete provider")) return;
+  if(p && p.documentPath) await supabase.storage.from("provider-documents").remove([p.documentPath]);
 }
 
 // ---------- Settings ----------
