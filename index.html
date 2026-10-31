@@ -224,7 +224,8 @@
 
   /* ---------- phone layout (installed iPhone/Android app) ---------- */
   .appbar, .drawer-scrim, .drawer-head{display:none;}
-  @media (max-width:820px){
+  /* up to 1024px so iPads in portrait get the app layout too; landscape keeps the sidebar */
+  @media (max-width:1024px){
     :root{--ios-bg:#f2f4f3; --hairline:rgba(20,50,47,.12);}
     body{
       background:var(--ios-bg);
@@ -285,9 +286,8 @@
     .card-head h2, .card > h2:first-child{white-space:normal; font-size:13px; letter-spacing:.03em; color:var(--muted); font-weight:600;}
     .card-head .rule, .card > h2:first-child::after{display:none;}
     .card-head .btn.primary{border-radius:999px; padding:8px 14px; font-size:14px;}
-    /* a card that only holds a table shows its rows as separate grouped cards */
-    .card:has(> .tablewrap), .card:has(> .toolbar){background:transparent; padding:4px 0 0;}
-    .card:has(> .tablewrap) > .card-head, .card:has(> .toolbar) > .card-head{padding:0 4px;}
+    td .rowgap{flex-wrap:nowrap;}
+    th, td{padding:11px 10px;}
     .stats-row{gap:10px; margin-bottom:16px;}
     .stat{padding:14px 8px; border:none; box-shadow:none; border-radius:16px;}
     .stat .value{font-size:22px;}
@@ -315,8 +315,22 @@
     .toolbar > div{flex:1 1 140px; min-width:0;}
   }
 
-  /* tables turn into one card per row on phones (labels added by labelTableCells) */
-  @media (max-width:640px){
+  /* any touch screen (incl. iPad landscape with the sidebar): no focus zoom, finger-sized buttons */
+  @media (pointer:coarse){
+    input[type=text],input[type=number],input[type=date],input[type=email],input[type=password],select,textarea{font-size:16px;}
+    .iconbtn{font-size:18px; padding:8px 10px;}
+    .btn.small{padding:7px 12px;}
+  }
+
+  /* tables turn into one card per row on phones and portrait iPads (labels added by labelTableCells) */
+  @media (min-width:641px) and (max-width:1024px){
+    .tablewrap table:not(.clinic-mini) tbody{display:grid !important; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; align-items:start;}
+    .tablewrap table:not(.clinic-mini) tr{margin-bottom:0 !important;}
+  }
+  @media (max-width:1024px){
+    /* a card that only holds a table shows its rows as separate grouped cards */
+    .card:has(> .tablewrap), .card:has(> .toolbar){background:transparent; padding:4px 0 0;}
+    .card:has(> .tablewrap) > .card-head, .card:has(> .toolbar) > .card-head{padding:0 4px;}
     .tablewrap{overflow:visible;}
     .tablewrap table:not(.clinic-mini), .tablewrap table:not(.clinic-mini) tbody,
     .tablewrap table:not(.clinic-mini) tr, .tablewrap table:not(.clinic-mini) td{display:block; width:100%;}
