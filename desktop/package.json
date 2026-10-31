@@ -1,0 +1,36 @@
+{
+  "name": "ptn-team-tracker",
+  "productName": "PTN Team Tracker",
+  "version": "1.0.2",
+  "description": "Physical Therapy Now - Team & PTO Tracker",
+  "main": "main.js",
+  "scripts": {
+    "prepare-app": "node -e \"const fs=require('fs');fs.mkdirSync('app',{recursive:true});fs.copyFileSync('../index.html','app/index.html')\"",
+    "start": "npm run prepare-app && electron .",
+    "dist": "npm run prepare-app && electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^32.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.ptn.teamtracker",
+    "productName": "PTN Team Tracker",
+    "icon": "icon.ico",
+    "files": [
+      "main.js",
+      "app/**/*",
+      "icon.ico"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}
