@@ -427,6 +427,44 @@
   </div>
 </dialog>
 
+<dialog id="clinicLicenseDialog">
+  <div class="dialog-inner">
+    <h2 id="clinicLicenseDialogTitle">Add Clinic License</h2>
+    <form class="grid" id="clinicLicenseForm">
+      <div>
+        <label>Clinic</label>
+        <select id="clLicClinic" required></select>
+      </div>
+      <div>
+        <label>License Type</label>
+        <input type="text" id="clLicType" list="clLicTypeOptions" placeholder="e.g. AHCA Health Care Clinic License" required>
+        <datalist id="clLicTypeOptions"></datalist>
+      </div>
+      <div>
+        <label>License Number</label>
+        <input type="text" id="clLicNumber" placeholder="License #">
+      </div>
+      <div>
+        <label>Issuing Agency</label>
+        <input type="text" id="clLicAgency" placeholder="e.g. AHCA, City of Orlando">
+      </div>
+      <div class="full">
+        <label>Expiration Day</label>
+        <input type="date" id="clLicExpiration">
+      </div>
+      <div class="full">
+        <label>License / Permit PDF (optional)</label>
+        <input type="file" id="clLicDocument" accept="application/pdf">
+        <div id="clLicDocumentCurrent" class="hint" style="margin-top:6px;"></div>
+      </div>
+      <div class="full dialog-actions">
+        <button type="button" class="btn" id="clLicCancel">Cancel</button>
+        <button type="submit" class="btn primary" id="clLicSubmit">Add License</button>
+      </div>
+    </form>
+  </div>
+</dialog>
+
 <script>
 (function(){
 "use strict";
@@ -450,12 +488,16 @@ var CORRECTIVE_REASONS = ["Attendance / Tardiness","Unscheduled Absence","Failur
   "Communication / Teamwork","Professional Conduct","Safety Violation","Failure to Complete Assigned Duties",
   "Confidentiality / HIPAA Violation","Other"];
 
+var CLINIC_LICENSE_TYPES = ["AHCA Health Care Clinic License","Business Tax Receipt (City)","Business Tax Receipt (County)",
+  "CLIA Certificate","X-Ray / Radiation Machine Registration","Biomedical Waste Permit","Fire Inspection Certificate",
+  "Certificate of Occupancy","Certificate of Liability Insurance"];
+
 var LICENSE_EXPIRY_WARNING_DAYS = 60;
-var CREDENTIAL_ALERT_DAYS = 30;
+var CREDENTIAL_ALERT_DAYS = 60;
 var BIRTHDAY_ALERT_DAYS = 10;
 
-var state = { session:null, dbReady:false, employees:[], requests:[], correctiveActions:[], providers:[], settings:null, tab:"dashboard", editingEmployeeId:null, editingRequestId:null, editingCorrectiveId:null, editingProviderId:null };
-var sortState = { employees:{key:"name",dir:1}, requests:{key:"firstDay",dir:-1}, corrective:{key:"date",dir:-1}, providers:{key:"expirationDate",dir:1} };
+var state = { session:null, dbReady:false, employees:[], requests:[], correctiveActions:[], providers:[], clinicLicenses:[], settings:null, tab:"dashboard", editingEmployeeId:null, editingRequestId:null, editingCorrectiveId:null, editingProviderId:null, editingClinicLicenseId:null };
+var sortState = { employees:{key:"name",dir:1}, requests:{key:"firstDay",dir:-1}, corrective:{key:"date",dir:-1}, providers:{key:"expirationDate",dir:1}, clinicLicenses:{key:"expirationDate",dir:1} };
 
 // ---------- row <-> app field mapping ----------
 function empFromRow(row){
@@ -489,6 +531,20 @@ function providerToRow(p){
     employee_id:p.employeeId||null, person_name:p.personName, occupation:p.occupation,
     license_number:p.licenseNumber||null, expiration_date:p.expirationDate||null,
     document_path:p.documentPath||null, document_name:p.documentName||null
+  };
+}
+function clinicLicenseFromRow(row){
+  return {
+    id:row.id, clinic:row.clinic, licenseType:row.license_type, licenseNumber:row.license_number,
+    issuingAgency:row.issuing_agency, expirationDate:row.expiration_date, createdAt:row.created_at,
+    documentPath:row.document_path, documentName:row.document_name
+  };
+}
+function clinicLicenseToRow(l){
+  return {
+    clinic:l.clinic, license_type:l.licenseType, license_number:l.licenseNumber||null,
+    issuing_agency:l.issuingAgency||null, expiration_date:l.expirationDate||null,
+    document_path:l.documentPath||null, document_name:l.documentName||null
   };
 }
 function caFromRow(row){
@@ -656,7 +712,7 @@ async function initAuth(){
 // ---------- Data loading + realtime ----------
 async function loadData(){
   setStatus("connecting","Connecting…");
-  await Promise.all([fetchEmployees(), fetchRequests(), fetchSettings(), fetchCorrectiveActions(), fetchProviders()]);
+  await Promise.all([fetchEmployees(), fetchRequests(), fetchSettings(), fetchCorrectiveActions(), fetchProviders(), fetchClinicLicenses()]);
   state.dbReady = true;
   setStatus("live","Live — synced with the team");
   render();
@@ -675,6 +731,9 @@ async function loadData(){
     .subscribe();
   supabase.channel("providers-changes")
     .on("postgres_changes", {event:"*", schema:"public", table:"providers"}, function(){ fetchProviders().then(render); })
+    .subscribe();
+  supabase.channel("clinic-licenses-changes")
+    .on("postgres_changes", {event:"*", schema:"public", table:"clinic_licenses"}, function(){ fetchClinicLicenses().then(render); })
     .subscribe();
 }
 async function fetchEmployees(){
@@ -697,6 +756,11 @@ async function fetchProviders(){
   if(res.error) console.error("fetchProviders", res.error);
   else state.providers = (res.data||[]).map(providerFromRow);
 }
+async function fetchClinicLicenses(){
+  var res = await supabase.from("clinic_licenses").select("*").order("expiration_date");
+  if(res.error) console.error("fetchClinicLicenses", res.error);
+  else state.clinicLicenses = (res.data||[]).map(clinicLicenseFromRow);
+}
 async function fetchSettings(){
   var res = await supabase.from("settings").select("*").eq("id",1).maybeSingle();
   if(res.error) console.error("fetchSettings", res.error);
@@ -714,7 +778,7 @@ var TAB_META = {
   dashboard:{title:"Dashboard", sub:"Overview of employees, hours, and PTO"},
   employees:{title:"Employees", sub:"Roster, clinics, and PTO balances"},
   requests:{title:"Time Off Requests", sub:"Review, approve, and track requests"},
-  credentials:{title:"Credentials & Compliance", sub:"Provider licenses, certifications, and expiration tracking"},
+  credentials:{title:"Credentials & Compliance", sub:"Provider and clinic licenses, certifications, and expiration tracking"},
   corrective:{title:"Corrective Actions", sub:"Write-ups, warnings, and performance notes"},
   settings:{title:"Settings", sub:"PTO policy, clinics, and alert thresholds"}
 };
@@ -770,9 +834,14 @@ function allStats(){
     .sort(function(a,b){ return a.nextBirthday-b.nextBirthday; });
 
   var credentialWindowEnd = new Date(today.getTime() + CREDENTIAL_ALERT_DAYS*86400000);
-  var expiringCredentials = state.providers.filter(function(p){ return p.expirationDate; }).map(function(p){
-    return { provider:p, days: Math.round((parseDate(p.expirationDate)-today)/86400000) };
-  }).filter(function(r){ return parseDate(r.provider.expirationDate) <= credentialWindowEnd; })
+  var credentialItems = state.providers.map(function(p){
+    return { name:p.personName, meta:p.occupation, expirationDate:p.expirationDate };
+  }).concat(state.clinicLicenses.map(function(l){
+    return { name:l.clinic, meta:l.licenseType, expirationDate:l.expirationDate };
+  }));
+  var expiringCredentials = credentialItems.filter(function(c){ return c.expirationDate; }).map(function(c){
+    return Object.assign({ days: Math.round((parseDate(c.expirationDate)-today)/86400000) }, c);
+  }).filter(function(r){ return parseDate(r.expirationDate) <= credentialWindowEnd; })
     .sort(function(a,b){ return a.days-b.days; });
 
   return { today:today, rows:rows, totalActive:totalActive, pendingCount:pendingCount, totalUsed:totalUsed, upcomingAnniv:upcomingAnniv, upcomingBirthdays:upcomingBirthdays, expiringCredentials:expiringCredentials };
@@ -812,7 +881,7 @@ function renderDashboard(){
     (s.expiringCredentials.length ? s.expiringCredentials.slice(0,6).map(function(r){
       var badgeCls = r.days<0 ? "red" : "amber";
       var badgeText = r.days<0 ? "Expired" : "In "+r.days+"d";
-      return "<div class='list-row'><div><div class='name'>"+esc(r.provider.personName)+"</div><div class='meta'>"+esc(r.provider.occupation)+" &middot; "+fmtDisplay(r.provider.expirationDate)+"</div></div><span class='badge "+badgeCls+"'>"+badgeText+"</span></div>";
+      return "<div class='list-row'><div><div class='name'>"+esc(r.name)+"</div><div class='meta'>"+esc(r.meta)+" &middot; "+fmtDisplay(r.expirationDate)+"</div></div><span class='badge "+badgeCls+"'>"+badgeText+"</span></div>";
     }).join("") : "<div class='empty'>No licenses expiring in the next "+CREDENTIAL_ALERT_DAYS+" days.</div>")+
     "</div>";
   html += "<div class='card'><h2>Upcoming Birthdays</h2>"+
@@ -950,8 +1019,8 @@ function sortRows(rows, key, dir, valueFn){
     if(va<vb) return -1*dir; if(va>vb) return 1*dir; return 0;
   });
 }
-function bindSortHeaders(scope, cb){
-  document.querySelectorAll("th[data-sort]").forEach(function(th){
+function bindSortHeaders(scope, cb, root){
+  (root||document).querySelectorAll("th[data-sort]").forEach(function(th){
     th.addEventListener("click", function(){
       var st = sortState[scope], key = th.dataset.sort;
       if(st.key===key) st.dir *= -1; else { st.key=key; st.dir=1; }
@@ -1285,11 +1354,31 @@ function renderCredentials(){
     return r[st.key]||"";
   });
 
-  var html = "<div class='card'>";
+  var licenses = state.clinicLicenses.slice();
+  var lst = sortState.clinicLicenses;
+  licenses = sortRows(licenses, lst.key, lst.dir, function(r){
+    if(lst.key==="clinic" || lst.key==="licenseType") return (r[lst.key]||"").toLowerCase();
+    return r[lst.key]||"";
+  });
+
+  var html = "<div class='card' id='providersCard'>";
   html += "<div class='card-head'><h2 style='margin:0;'>All Providers ("+list.length+")</h2><div class='rule'></div><div class='actions'><button class='btn primary' id='btnAddProv'>+ Add Provider</button></div></div>";
   html += renderProvidersTable(list);
   html += "</div>";
+  html += "<div class='card' id='clinicLicensesCard'>";
+  html += "<div class='card-head'><h2 style='margin:0;'>Clinic Licenses ("+licenses.length+")</h2><div class='rule'></div><div class='actions'><button class='btn primary' id='btnAddClinicLic'>+ Add Clinic License</button></div></div>";
+  html += renderClinicLicensesTable(licenses);
+  html += "</div>";
   document.getElementById("content").innerHTML = html;
+
+  document.getElementById("btnAddClinicLic").addEventListener("click", function(){ openClinicLicenseDialog(null); });
+  document.querySelectorAll("[data-edit-cl]").forEach(function(b){ b.addEventListener("click", function(){ openClinicLicenseDialog(b.dataset.editCl); }); });
+  document.querySelectorAll("[data-del-cl]").forEach(function(b){ b.addEventListener("click", function(){ deleteClinicLicense(b.dataset.delCl); }); });
+  document.querySelectorAll("[data-view-cl-doc]").forEach(function(b){ b.addEventListener("click", function(){
+    var l = state.clinicLicenses.find(function(x){return x.id===b.dataset.viewClDoc;});
+    if(l && l.documentPath) openProviderDocument(l.documentPath);
+  }); });
+  bindSortHeaders("clinicLicenses", function(){ renderCredentials(); }, document.getElementById("clinicLicensesCard"));
 
   document.getElementById("btnAddProv").addEventListener("click", function(){ openProviderDialog(null); });
   document.querySelectorAll("[data-edit-prov]").forEach(function(b){ b.addEventListener("click", function(){ openProviderDialog(b.dataset.editProv); }); });
@@ -1298,7 +1387,27 @@ function renderCredentials(){
     var p = state.providers.find(function(x){return x.id===b.dataset.viewDoc;});
     if(p && p.documentPath) openProviderDocument(p.documentPath);
   }); });
-  bindSortHeaders("providers", function(){ renderCredentials(); });
+  bindSortHeaders("providers", function(){ renderCredentials(); }, document.getElementById("providersCard"));
+}
+function renderClinicLicensesTable(list){
+  if(!list.length) return "<div class='empty'>No clinic licenses on record.</div>";
+  var head = "<th data-sort='clinic'>Clinic</th><th data-sort='licenseType'>License Type</th><th class='nosort'>License Number</th><th class='nosort'>Issuing Agency</th><th data-sort='expirationDate'>Expiration</th><th class='nosort'>Status</th><th class='nosort'></th>";
+  var body = list.map(function(l){
+    var st = expirationStatus(l.expirationDate);
+    return "<tr>"+
+      "<td>"+esc(l.clinic)+"</td>"+
+      "<td>"+esc(l.licenseType)+"</td>"+
+      "<td>"+esc(l.licenseNumber||"—")+"</td>"+
+      "<td>"+esc(l.issuingAgency||"—")+"</td>"+
+      "<td>"+fmtDisplay(l.expirationDate)+"</td>"+
+      "<td><span class='badge "+st.cls+"'>"+st.label+"</span></td>"+
+      "<td><div class='rowgap'>"+
+        (l.documentPath ? "<button class='iconbtn' data-view-cl-doc='"+l.id+"' title='View PDF'>&#128196;</button>" : "")+
+        "<button class='iconbtn' data-edit-cl='"+l.id+"' title='Edit'>&#9998;</button>"+
+        "<button class='iconbtn' data-del-cl='"+l.id+"' title='Delete'>&#128465;</button></div></td>"+
+      "</tr>";
+  }).join("");
+  return "<div class='tablewrap'><table><thead><tr>"+head+"</tr></thead><tbody>"+body+"</tbody></table></div>";
 }
 function renderProvidersTable(list){
   if(!list.length) return "<div class='empty'>No providers on record.</div>";
@@ -1431,6 +1540,89 @@ async function deleteProvider(id){
   var p = state.providers.find(function(x){return x.id===id;});
   if(!reportIfError(await supabase.from("providers").delete().eq("id", id), "delete provider")) return;
   if(p && p.documentPath) await supabase.storage.from("provider-documents").remove([p.documentPath]);
+}
+
+var clinicLicenseDialog = document.getElementById("clinicLicenseDialog");
+function openClinicLicenseDialog(id){
+  state.editingClinicLicenseId = id;
+  var clinics = state.settings.clinics.filter(function(c){ return c!=="All"; });
+  var l = id ? state.clinicLicenses.find(function(x){return x.id===id;}) : null;
+  if(l && clinics.indexOf(l.clinic)===-1) clinics.push(l.clinic);
+  document.getElementById("clLicClinic").innerHTML = clinics.map(function(c){ return "<option>"+esc(c)+"</option>"; }).join("");
+  document.getElementById("clLicTypeOptions").innerHTML = CLINIC_LICENSE_TYPES.map(function(t){ return "<option value='"+esc(t)+"'>"; }).join("");
+  document.getElementById("clLicDocument").value = "";
+  var currentBox = document.getElementById("clLicDocumentCurrent");
+  currentBox.innerHTML = "";
+  var title = document.getElementById("clinicLicenseDialogTitle");
+  var submit = document.getElementById("clLicSubmit");
+  if(l){
+    title.textContent = "Edit Clinic License"; submit.textContent = "Save Changes";
+    document.getElementById("clLicClinic").value = l.clinic;
+    document.getElementById("clLicType").value = l.licenseType;
+    document.getElementById("clLicNumber").value = l.licenseNumber||"";
+    document.getElementById("clLicAgency").value = l.issuingAgency||"";
+    document.getElementById("clLicExpiration").value = l.expirationDate||"";
+    if(l.documentPath){
+      currentBox.innerHTML = "Current file: <a href='#' id='clLicViewDoc'>"+esc(l.documentName||"document.pdf")+"</a>"+
+        " &nbsp; <label style='font-weight:400;'><input type='checkbox' id='clLicRemoveDocument' style='width:auto;'> Remove file</label>";
+      document.getElementById("clLicViewDoc").addEventListener("click", function(ev){
+        ev.preventDefault();
+        openProviderDocument(l.documentPath);
+      });
+    }
+  } else {
+    title.textContent = "Add Clinic License"; submit.textContent = "Add License";
+    document.getElementById("clinicLicenseForm").reset();
+  }
+  clinicLicenseDialog.showModal();
+}
+document.getElementById("clLicCancel").addEventListener("click", function(){ clinicLicenseDialog.close(); });
+document.getElementById("clinicLicenseForm").addEventListener("submit", async function(e){
+  e.preventDefault();
+  var existing = state.editingClinicLicenseId ? state.clinicLicenses.find(function(x){return x.id===state.editingClinicLicenseId;}) : null;
+  var documentPath = existing ? existing.documentPath : null;
+  var documentName = existing ? existing.documentName : null;
+
+  var removeBox = document.getElementById("clLicRemoveDocument");
+  if(removeBox && removeBox.checked && documentPath){
+    await supabase.storage.from("provider-documents").remove([documentPath]);
+    documentPath = null; documentName = null;
+  }
+
+  var newId = state.editingClinicLicenseId || ((window.crypto && crypto.randomUUID) ? crypto.randomUUID() : ("clic-"+Date.now()));
+  var file = document.getElementById("clLicDocument").files[0];
+  if(file){
+    if(file.type !== "application/pdf"){ alert("Please choose a PDF file."); return; }
+    var path = "clinics/"+newId+"-"+Date.now()+".pdf";
+    var upload = await supabase.storage.from("provider-documents").upload(path, file, {upsert:true, contentType:"application/pdf"});
+    if(!reportIfError(upload, "upload PDF")) return;
+    documentPath = path; documentName = file.name;
+  }
+
+  var data = {
+    clinic: document.getElementById("clLicClinic").value,
+    licenseType: document.getElementById("clLicType").value.trim(),
+    licenseNumber: document.getElementById("clLicNumber").value.trim(),
+    issuingAgency: document.getElementById("clLicAgency").value.trim(),
+    expirationDate: document.getElementById("clLicExpiration").value || null,
+    documentPath: documentPath,
+    documentName: documentName
+  };
+  if(!data.clinic || !data.licenseType) return;
+  var res;
+  if(state.editingClinicLicenseId){
+    res = await supabase.from("clinic_licenses").update(clinicLicenseToRow(data)).eq("id", state.editingClinicLicenseId);
+  } else {
+    res = await supabase.from("clinic_licenses").insert(Object.assign({id:newId}, clinicLicenseToRow(data)));
+  }
+  if(!reportIfError(res, "save clinic license")) return;
+  clinicLicenseDialog.close();
+});
+async function deleteClinicLicense(id){
+  if(!confirm("Delete this clinic license?")) return;
+  var l = state.clinicLicenses.find(function(x){return x.id===id;});
+  if(!reportIfError(await supabase.from("clinic_licenses").delete().eq("id", id), "delete clinic license")) return;
+  if(l && l.documentPath) await supabase.storage.from("provider-documents").remove([l.documentPath]);
 }
 
 // ---------- Settings ----------
